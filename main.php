@@ -2,6 +2,7 @@
 
 add_action( 'template_redirect', function() {
 
+// If Admin is login
 if ( ! is_user_logged_in() || ! current_user_can( 'administrator' ) ) {
     return;
 }
@@ -9,9 +10,12 @@ if ( ! is_user_logged_in() || ! current_user_can( 'administrator' ) ) {
 $percent     = 0;
 $action      = '';
 $round       = isset($_GET['round']) ? sanitize_text_field($_GET['round']) : '';
-$roundbase   = isset($_GET['roundbase']) ? intval($_GET['roundbase']) : 10000;   
+$roundbase   = isset($_GET['roundbase']) ? intval($_GET['roundbase']) : 1000; // پیش‌فرض هزار تومانی
 $saleprice   = ( isset($_GET['saleprice']) && $_GET['saleprice'] === 'true' );
-$productType = isset($_GET['product']) ? sanitize_text_field($_GET['product']) : 'all'; 
+$productType = isset($_GET['product']) ? sanitize_text_field($_GET['product']) : 'all'; // پیش‌فرض all
+
+$offset      = isset($_GET['offset']) ? intval($_GET['offset']) : 0;
+$limit       = isset($_GET['limit']) ? intval($_GET['limit']) : 50;
 
 if ( isset($_GET['increase']) ) {
     $percent = intval($_GET['increase']);
@@ -26,6 +30,7 @@ if ( ! $action || ! $percent ) {
     return;
 }
 
+// Round & Calculate New Price
 $calculate_new_price = function( $price ) use ( $action, $percent, $round, $roundbase ) {
     if ($price === '' || !is_numeric($price)) {
         return null;
@@ -38,7 +43,7 @@ $calculate_new_price = function( $price ) use ( $action, $percent, $round, $roun
 
     $new_price = max( 0, $new_price );
 
-  
+    // Roundbase
     if ( $round === 'up' ) {
         $new_price = ceil( $new_price / $roundbase ) * $roundbase;
     } elseif ( $round === 'down' ) {
@@ -48,10 +53,19 @@ $calculate_new_price = function( $price ) use ( $action, $percent, $round, $roun
     return $new_price;
 };
 
-
-$args = [
+// Count all products
+$total_products = wc_get_products([
     'status' => 'publish',
     'limit'  => -1,
+    'return' => 'ids',
+]);
+$total_count = count($total_products);
+
+// Get product by offset & limit
+$args = [
+    'status' => 'publish',
+    'limit'  => $limit,
+    'offset' => $offset,
     'return' => 'ids',
 ];
 $products = wc_get_products( $args );
@@ -61,6 +75,7 @@ $changed = 0;
 foreach ( $products as $product_id ) {
     $product = wc_get_product( $product_id );
 
+    // Filter product type
     if ( $productType === 'simple' && ! $product->is_type( 'simple' ) ) {
         continue;
     }
@@ -68,6 +83,7 @@ foreach ( $products as $product_id ) {
         continue;
     }
 
+    // --- simple product ---
     if ( $product->is_type( 'simple' ) ) {
         $reg_raw  = $product->get_regular_price();
         $sale_raw = $product->get_sale_price();
@@ -94,6 +110,7 @@ foreach ( $products as $product_id ) {
         }
     }
 
+    // --- variable product ---
     if ( $product->is_type( 'variable' ) ) {
         foreach ( $product->get_children() as $child_id ) {
             $variation = wc_get_product( $child_id );
@@ -127,18 +144,27 @@ foreach ( $products as $product_id ) {
     }
 }
 
+// Update table
 if ( function_exists( 'wc_update_product_lookup_tables' ) ) {
     wc_update_product_lookup_tables();
 }
 
+// Calculate Remainder
+$next_offset = $offset + $limit;
+$remaining   = max( 0, $total_count - $next_offset );
+
 wp_send_json([
-    'status'     => 'success',
-    'action'     => $action,
-    'percent'    => $percent,
-    'round'      => $round ?: 'none',
-    'roundbase'  => $roundbase,
-    'saleprice'  => $saleprice ? 'true' : 'false',
-    'product'    => $productType,
-    'changed'    => $changed
+    'status'      => 'success',
+    'action'      => $action,
+    'percent'     => $percent,
+    'round'       => $round ?: 'none',
+    'roundbase'   => $roundbase,
+    'saleprice'   => $saleprice ? 'true' : 'false',
+    'product'     => $productType,
+    'changed'     => $changed,
+    'processed'   => $offset . ' - ' . ($offset + count($products)),
+    'total'       => $total_count,
+    'remaining'   => $remaining,
+    'next_offset' => $remaining > 0 ? $next_offset : null,
 ]);
 });
